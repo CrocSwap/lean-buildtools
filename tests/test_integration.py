@@ -95,7 +95,9 @@ class Integration(unittest.TestCase):
             'import Lean.Elab.Tactic.BuiltinTactic\ntheorem baseline : True := by trivial\n')
         baseline, _ = self.run_tool("profile", "Probe.lean", "baseline", "--stop-fraction", "0.99")
         peak = json.loads((baseline / "build.json").read_text())["children"][0]["peak_rss_bytes"]
-        fraction = min(0.98, (peak / 1024**2 + 64) / 1400)
+        # Import residency varies between processes on hosted runners. Leave
+        # enough headroom to exercise the allocating theorem, rather than startup.
+        fraction = min(0.85, (peak / 1024**2 + 256) / 1400)
         self.stress_source()
         path, proc = self.run_tool("profile", "Probe.lean", "stopped", "--memory", "1400",
                                    "--stop-fraction", str(fraction), "--interval", "0.03", success=False)

@@ -1,4 +1,5 @@
-import Lean
+import Lean.Elab.Command
+import Lean.Data.Json.FromToJson
 
 open Lean Elab Command
 

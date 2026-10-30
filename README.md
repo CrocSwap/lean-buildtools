@@ -12,11 +12,16 @@ plugin on first use. There are no Python runtime dependencies.
 With Lean 4.35.0 available through Elan and a C compiler on your path:
 
 ```sh
+git clone https://github.com/CrocSwap/lean-buildtools.git
+cd lean-buildtools
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 lean-buildtools --help
 ```
+
+Downloadable wheels and source archives are available on the
+[GitHub releases page](https://github.com/CrocSwap/lean-buildtools/releases).
 
 For development, use `python -m pip install -e .`. Wheels and source distributions
 both include the plugin's Lean/C sources. The plugin is compiled locally for your

@@ -20,6 +20,10 @@ classifiers = [
   "Topic :: Software Development :: Build Tools",
 ]
 
+[project.urls]
+Repository = "https://github.com/CrocSwap/lean-buildtools"
+Issues = "https://github.com/CrocSwap/lean-buildtools/issues"
+
 [project.scripts]
 lean-buildtools = "lean_buildtools.cli:main"
 

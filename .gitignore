@@ -1,0 +1,11 @@
+__pycache__/
+.scratch/
+.build/
+.lean-buildtools/
+*.egg-info/
+dist/
+release-artifacts/
+build/
+.venv/
+examples/hello/.lake/
+examples/hello/lake-manifest.json

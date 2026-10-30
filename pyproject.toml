@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lean-buildtools"
+version = "0.1.0"
+description = "Capped Lean builds and declaration resource profiles"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "lean-buildtools contributors"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Build Tools",
+]
+
+[project.scripts]
+lean-buildtools = "lean_buildtools.cli:main"
+
+[tool.setuptools]
+packages = ["lean_buildtools"]
+
+[tool.setuptools.package-data]
+lean_buildtools = ["lean/*.lean", "lean/*.c"]

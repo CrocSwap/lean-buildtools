@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: macos-latest
+            python: "3.14"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Lean 4.35.0
+        shell: bash
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain leanprover/lean4:v4.35.0
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Build and install distributions
+        run: |
+          lean --version
+          lake --version
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+          python -m pip install --force-reinstall dist/*.whl
+      - name: Test installed package outside the checkout
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          LEAN_BUILDTOOLS_TEST_INSTALLED=1 python -m unittest discover -s "$GITHUB_WORKSPACE/tests" -v
+      - name: Run installed CLI tutorial
+        run: python scripts/smoke_install.py

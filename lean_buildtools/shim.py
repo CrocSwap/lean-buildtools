@@ -16,6 +16,7 @@ def main():
     real = config["lean"]
     if not any(a.endswith(".lean") for a in args):
         os.execv(real, [real, *args])
+    args = [*config.get("extra_args", []), *args]
     if any(a in args for a in ("--run", "--server", "--worker", "--stdin")):
         sys.exit("lean-buildtools: unsupported compiler mode")
     source = next(a for a in args if a.endswith(".lean"))
@@ -31,12 +32,14 @@ def main():
             sys.exit(125)
         event_file = run / f"events-{os.getpid()}.jsonl"
         os.environ["LEAN_BUILDTOOLS_EVENTS"] = str(event_file)
-        cmd = [real, *capped_args(args, config["memory"], deny_sorry=config.get("deny_sorry", False)),
+        cmd = [real, *capped_args(args, config["memory"], deny_sorry=config.get("deny_sorry", False),
+                                threads=config.get("threads", 1)),
                f"--plugin={config['plugin']}"]
         active_file = run / f"active-{os.getpid()}"
         active_file.write_text(str(os.getpid()))
         try:
             code = supervise(cmd, events=event_file, result=run / "children.jsonl",
+                             threads=config.get("threads", 1),
                              **{k: config[k] for k in ("memory", "fraction", "horizon", "timeout", "interval")})
         finally:
             active_file.unlink(missing_ok=True)

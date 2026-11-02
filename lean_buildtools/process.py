@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ def rss_of(pid: int) -> int:
     return int(out.stdout.strip() or "0") * 1024
 
 
-def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False) -> list[str]:
+def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False, threads: int = 1) -> list[str]:
     result = []
     i = 0
     while i < len(args):
@@ -52,11 +53,11 @@ def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False) -> li
             continue
         result.append(arg)
         i += 1
-    return ["-j1", f"-M{memory}", "-DElab.async=false",
+    return [f"-j{threads}", f"-M{memory}", "-DElab.async=false",
             *(["-E", "hasSorry"] if deny_sorry else []), *result]
 
 
-def caps_match(argv: list[str], memory: int) -> bool:
+def caps_match(argv: list[str], memory: int, thread_count: int = 1) -> bool:
     # Exact comparison with normalized arguments also rules out later overrides.
     threads, mem = [], []
     i = 1
@@ -74,17 +75,18 @@ def caps_match(argv: list[str], memory: int) -> bool:
                 values.append(arg[len(flag):])
                 break
         i += 1
-    return threads == ["1"] and mem == [str(memory)]
+    return threads == [str(thread_count)] and mem == [str(memory)]
 
 
-def trend_reason(samples, cap: int, fraction: float, horizon: float) -> str | None:
+def trend_reason(samples, cap: int, fraction: float, horizon: float, *,
+                 elaboration_started: bool = True) -> str | None:
     if not samples:
         return None
     now, rss = samples[-1]
     if rss >= cap * fraction:
         return "rss threshold"
     # Require sustained growth over at least a second, and a substantial RSS baseline.
-    if len(samples) >= 4 and now - samples[0][0] >= 1 and rss >= cap * 0.5:
+    if elaboration_started and len(samples) >= 4 and now - samples[0][0] >= 1 and rss >= cap * 0.5:
         slope = (rss - samples[0][1]) / (now - samples[0][0])
         if slope > 0 and rss + slope * horizon >= cap * fraction:
             return "rss growth projects threshold within horizon"
@@ -96,27 +98,34 @@ def append_json(path: Path, value: dict) -> None:
         f.write(json.dumps(value, ensure_ascii=False) + "\n")
 
 
+def _signal_group(proc: subprocess.Popen, sig: int) -> bool:
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError as error:
+        if error.errno in (errno.ESRCH, errno.EPERM) and proc.poll() is not None:
+            return False
+        raise
+    return True
+
+
 def terminate(proc: subprocess.Popen) -> None:
     if proc.poll() is None:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        if not _signal_group(proc, signal.SIGTERM):
             proc.wait()
             return
         try:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            if not _signal_group(proc, signal.SIGKILL):
+                proc.wait()
+                return
             proc.wait()
         # Native evaluation subprocesses belong to the same owned process group.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _signal_group(proc, signal.SIGKILL)
 
 
 def supervise(cmd: list[str], *, events: Path, result: Path, memory: int,
-              fraction: float, horizon: float, timeout: float, interval: float) -> int:
+              fraction: float, horizon: float, timeout: float, interval: float, threads: int = 1) -> int:
     """Own one direct compiler child; never inspect/kill unrelated processes."""
     proc = subprocess.Popen(cmd, start_new_session=True)
     previous_handlers = {}
@@ -135,33 +144,41 @@ def supervise(cmd: list[str], *, events: Path, result: Path, memory: int,
     event_pos = 0
     event_buffer = b""
     history = []
+    elaboration_started = False
     sampled = events.with_name(events.stem.replace("events-", "samples-") + ".jsonl")
+    def read_events():
+        nonlocal event_pos, event_buffer, peak, elaboration_started, active
+        try:
+            with events.open("rb") as f:
+                f.seek(event_pos)
+                event_buffer += f.read()
+                event_pos = f.tell()
+        except FileNotFoundError:
+            return
+        lines = event_buffer.split(b"\n")
+        event_buffer = lines.pop()
+        for line in lines:
+            event = json.loads(line)
+            if event.get("pid") == proc.pid:
+                history.append(event)
+                peak = max(peak, int(event.get("rss_bytes", 0)))
+                if (not elaboration_started and event["event"] == "start" and
+                        event.get("syntax", "").endswith((".declaration", ".example", ".mutual"))):
+                    samples.clear()
+                    elaboration_started = True
+                active = event if event["event"] == "start" else None
     try:
         while proc.poll() is None:
             if not verified:
                 try:
                     observed = argv_of(proc.pid)
                     verified = (os.path.realpath(observed[0]) == os.path.realpath(cmd[0])
-                                and caps_match(observed, memory))
+                                and caps_match(observed, memory, threads))
                 except (OSError, IndexError, ValueError):
                     pass
                 if not verified and time.monotonic() - start > 1:
                     reason = "could not verify real compiler argv"
-            try:
-                with events.open("rb") as f:
-                    f.seek(event_pos)
-                    event_buffer += f.read()
-                    event_pos = f.tell()
-                lines = event_buffer.split(b"\n")
-                event_buffer = lines.pop()
-                for line in lines:
-                    event = json.loads(line)
-                    if event.get("pid") == proc.pid:
-                        history.append(event)
-                        peak = max(peak, int(event.get("rss_bytes", 0)))
-                        active = event if event["event"] == "start" else None
-            except FileNotFoundError:
-                pass
+            read_events()
             try:
                 rss = rss_of(proc.pid)
             except (OSError, ValueError, ProcessLookupError):
@@ -172,7 +189,8 @@ def supervise(cmd: list[str], *, events: Path, result: Path, memory: int,
             samples.append((now, rss))
             while samples and now - samples[0][0] > 5:
                 samples.popleft()
-            reason = reason or trend_reason(samples, memory * 1024**2, fraction, horizon)
+            reason = reason or trend_reason(samples, memory * 1024**2, fraction, horizon,
+                                            elaboration_started=elaboration_started)
             if timeout and now - start >= timeout:
                 reason = "wall time limit"
             if cancelled:
@@ -182,6 +200,12 @@ def supervise(cmd: list[str], *, events: Path, result: Path, memory: int,
                 break
             time.sleep(interval if verified else min(interval, 0.005))
         code = proc.wait()
+        # A short final declaration may complete between RSS polls. Its flushed
+        # boundary events still contribute to the peak and completion state.
+        stopped_at = active
+        read_events()
+        if reason:
+            active = stopped_at
     finally:
         terminate(proc)
         for sig, handler in previous_handlers.items():

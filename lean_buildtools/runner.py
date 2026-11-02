@@ -94,6 +94,8 @@ def prepare(project: Path, output: Path, options) -> tuple[Path, dict]:
     config = dict(lean=str(sysroot / "bin/lean"), plugin=plugin, run=str(output),
                   memory=options.memory, fraction=options.stop_fraction,
                   horizon=options.horizon, timeout=options.timeout, interval=options.interval)
+    config["threads"] = getattr(options, "threads", 1)
+    config["extra_args"] = getattr(options, "lean_arg", [])
     config["prepend_path"] = [str(p) for p in (getattr(options, "search_path", None),
                                               getattr(options, "lean_path", None)) if p]
     config["deny_sorry"] = getattr(options, "deny_sorry", False)
@@ -102,7 +104,7 @@ def prepare(project: Path, output: Path, options) -> tuple[Path, dict]:
     config_file.write_text(json.dumps(config, indent=2) + "\n")
     env = os.environ.copy()
     env.update(LAKE_OVERRIDE_LEAN="true", LEAN_SYSROOT=str(shimroot), LEAN=str(shim),
-               LEAN_NUM_THREADS="1", LEAN_IMPORT_WORKERS="1",
+               LEAN_NUM_THREADS=str(config["threads"]), LEAN_IMPORT_WORKERS="1",
                LEAN_BUILDTOOLS_CONFIG=str(config_file))
     extras = [str(p) for p in (getattr(options, "search_path", None), getattr(options, "lean_path", None)) if p]
     if extras:

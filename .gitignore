@@ -9,3 +9,6 @@ build/
 .venv/
 examples/hello/.lake/
 examples/hello/lake-manifest.json
+lean-buildtools.local.toml
+native/.lake/
+native/lake-manifest.json

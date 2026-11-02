@@ -77,6 +77,46 @@ class Integration(unittest.TestCase):
         self.assertTrue(json.loads((trim / "proposal.json").read_text())["removed"])
         self.assertEqual((self.project / "Probe.lean").read_bytes(), before)
 
+    def test_audit_detects_stale_privately_imported_summary(self):
+        sources = self.project / "sources"
+        sources.mkdir()
+        (sources / "AuditLeaf.lean").write_text(
+            "module\n@[expose] public section\nnamespace AuditTest\n"
+            "axiom oldProof : True\ntheorem leaf : True := oldProof\nend AuditTest\n")
+        (sources / "AuditPrivate.lean").write_text(
+            "module\npublic import AuditLeaf\n@[expose] public section\n"
+            "namespace AuditTest\ntheorem cell : True := leaf\nend AuditTest\n")
+        (sources / "AuditRoot.lean").write_text(
+            "module\nimport AuditPrivate\n@[expose] public section\n"
+            "namespace AuditTest\ntheorem headline : True := cell\nend AuditTest\n")
+        (self.project / "all.json").write_text('["sources/AuditLeaf.lean", "sources/AuditPrivate.lean", "sources/AuditRoot.lean"]')
+        (self.project / "leaf.json").write_text('["sources/AuditLeaf.lean"]')
+        (self.project / "roots.json").write_text(json.dumps({"roots": [
+            {"module": "AuditRoot", "name": "AuditTest.headline"}]}))
+        prefix = str(self.project / ".lake/build/lib/lean")
+        self.run_tool("profile-batch", "all.json", "audit-before", "--lean-path", prefix, "--source-root", "sources")
+        (sources / "AuditLeaf.lean").write_text(
+            "module\n@[expose] public section\nnamespace AuditTest\n"
+            "theorem leaf : True := True.intro\nend AuditTest\n")
+        self.run_tool("profile-batch", "leaf.json", "audit-leaf", "--lean-path", prefix, "--source-root", "sources")
+        stale, _ = self.run_tool("audit", "roots.json", "audit-stale", "--lean-path", prefix, success=False)
+        data = json.loads((stale / "audit.json").read_text())
+        self.assertEqual(data["status"], "fail")
+        self.assertEqual(data["roots"][0]["axioms"], [])
+        self.assertIn("AuditTest.cell", {r["name"] for r in data["roots"][0]["summary_mismatches"]})
+        self.assert_audited(stale)
+        plan, _ = self.run_tool("refresh-plan", str(stale), "audit-plan", "--changed-module", "AuditLeaf",
+                                "--source-root", "sources")
+        planned = json.loads((plan / "plan.json").read_text())
+        self.assertEqual(planned["modules"], ["AuditPrivate", "AuditRoot"])
+        (self.project / "refresh.json").write_text((plan / "plan.json").read_text())
+        clean, _ = self.run_tool("refresh", "refresh.json", "audit-clean", "--lean-path", prefix)
+        data = json.loads((clean / "audit/audit.json").read_text())
+        self.assertEqual(data["status"], "pass")
+        self.assertEqual(data["roots"][0]["summary_mismatches"], [])
+        self.assertFalse((clean / "audit/graph.sqlite").exists())
+        self.assert_audited(clean)
+
     def stress_source(self):
         (self.project / "Probe.lean").write_text(
             'import Lean.Elab.Tactic.BuiltinTactic\nset_option maxRecDepth 100000\n'

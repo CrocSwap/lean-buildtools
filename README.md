@@ -20,8 +20,8 @@ python -m pip install .
 lean-buildtools --help
 ```
 
-Downloadable wheels and source archives are available on the
-[GitHub releases page](https://github.com/CrocSwap/lean-buildtools/releases).
+For locally built wheels and source archives, see the
+[release instructions](docs/releasing.md).
 
 For development, use `python -m pip install -e .`. Wheels and source distributions
 both include the plugin's Lean/C sources. The plugin is compiled locally for your
@@ -31,6 +31,11 @@ toolchain and cached under `~/Library/Caches/lean-buildtools` on macOS or
 never used as writable caches.
 
 Try the dependency-free [hello tutorial](docs/tutorial.md) first.
+For SSH builds, see [remote execution](docs/remotes.md).
+For body-based transitive axiom checks and stale private-import summaries, see
+[axiom audits](docs/axioms.md).
+Use [selective caller refresh](docs/refresh.md) to plan dependent rebuilds and
+repeat the audit afterwards.
 
 ## Commands
 
@@ -38,6 +43,11 @@ Try the dependency-free [hello tutorial](docs/tutorial.md) first.
 lean-buildtools build MyProject.Heavy --project /path/to/project
 lean-buildtools profile MyProject/Heavy.lean --project /path/to/project --output /tmp/heavy-profile
 lean-buildtools report /tmp/heavy-profile --project /path/to/project --sort rss_delta_bytes
+lean-buildtools audit tools/roots.json --project /path/to/project --output /tmp/axiom-audit
+lean-buildtools refresh-plan /tmp/axiom-audit --project /path/to/project --changed-module MyProject.Leaf --output tools/refresh-plan
+lean-buildtools refresh tools/refresh-plan/plan.json --project /path/to/project --output /tmp/refreshed
+lean-buildtools profile-batch tools/batch.json --project /path/to/project --output /tmp/batch
+lean-buildtools build MyProject.Heavy --project /path/to/project --remote builder
 lean-buildtools split MyProject/Heavy.lean --project /path/to/project --profile /tmp/heavy-profile/profile.json --output /tmp/heavy-split
 lean-buildtools trim MyProject/Heavy.lean --project /path/to/project --output /tmp/heavy-trim
 ```
@@ -48,12 +58,28 @@ boundaries; `profile` also writes a ranked report automatically. Source paths ar
 relative to `--project`, and each output directory must be new. The Python module
 entry point, `python -m lean_buildtools`, accepts the same commands.
 
+`audit` reads already compiled artifacts and compares actual transitive proof
+dependencies with imported axiom summaries, including private imports.
+`refresh-plan` selects affected callers within the audited roots; `refresh`
+compiles that ordered plan and audits again. These commands require coherent,
+matching precompiled providers; see [axioms](docs/axioms.md) and
+[refresh](docs/refresh.md) for their manifests and limits.
+
+`profile-batch` compiles an explicitly ordered JSON list of source paths, with
+`--source-root` for layouts such as `sources/`. It stops at the first failure.
+With `--remote builder`, builds, profiles, batches, audits and refreshes use a
+[configured SSH host](docs/remotes.md); batches share one sync, job and lease.
+
 Defaults are one compiler thread, `-M1400`, a 300 second wall limit, RSS samples
 every 0.1 seconds, and an early stop at 85% of the cap. A growth trend projecting
-that threshold within three seconds can also stop the process. Adjust these with
-`--memory`, `--timeout`, `--interval`, `--stop-fraction`, and `--horizon`.
+that threshold within three seconds can also stop the process once declaration
+elaboration begins, using samples collected after that point. The RSS threshold
+remains active during imports and startup. Adjust these with
+`--memory`, `--threads`, `--timeout`, `--interval`, `--stop-fraction`, and `--horizon`.
 `--horizon 0` disables projection while retaining the RSS threshold; `--timeout 0`
-disables the wall limit. Projection is conservative and can stop a brief import ramp.
+disables the wall limit. Projection is conservative and can stop a brief proof-time ramp.
+Use repeatable `--lean-arg=-DmaxHeartbeats=100000` arguments for explicit compiler
+options; thread and memory caps still override conflicting flags.
 
 The wrapper sets `LAKE_OVERRIDE_LEAN`, serializes compiler children within a run,
 replaces conflicting thread/memory flags, and checks the actual executed child's
@@ -115,6 +141,19 @@ cloning or Linux reflinks where available, with a normal-copy fallback on Linux.
 It excludes root build archives, `.git`, and report directories, and rejects
 external symlinks/path dependencies. If a dependency lives beside your project,
 copy the containing workspace instead. Custom build layouts may need a manual copy.
+
+## native-proof-tools (experimental)
+
+The optional [native/](native/README.md) Lean package supplies explicit theorem
+rule sets, selected state/frame simplification, bounded cases and equality
+transport for a supplied invariant. It builds independently of the Python
+package and has no external model dependency.
+
+It is a small helper library: instruction semantics, access permissions, ABI
+contracts, loop invariants and whole-program composition remain the caller's
+work. It provides no general symbolic executor, whole-loop automation or measured
+proof-authoring speedup. Python wheels exclude it; the source distribution and
+repository include it. See its [usage guide](native/USAGE.md).
 
 ## Development and releases
 

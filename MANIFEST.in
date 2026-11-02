@@ -3,3 +3,7 @@ recursive-include docs *.md
 recursive-include examples/hello *.lean *.toml lean-toolchain
 recursive-include tests *.py
 include scripts/smoke_install.py
+include native/*.md native/lakefile.toml native/lean-toolchain
+recursive-include native/NativeProof *.lean
+recursive-include native/Tests *.lean *.json
+recursive-include native/examples *.lean

@@ -49,3 +49,7 @@ jobs:
           LEAN_BUILDTOOLS_TEST_INSTALLED=1 python -m unittest discover -s "$GITHUB_WORKSPACE/tests" -v
       - name: Run installed CLI tutorial
         run: python scripts/smoke_install.py
+      - name: Check optional experimental native package
+        run: |
+          lean-buildtools build NativeProof.Smoke --project native --deny-sorry
+          lean-buildtools profile-batch Tests/rules.json --project native --deny-sorry

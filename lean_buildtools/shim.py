@@ -8,17 +8,25 @@ import sys
 from lean_buildtools.process import capped_args, supervise
 
 
+METADATA_FLAGS = frozenset({
+    "-h", "--help", "--features", "-v", "--version", "-V", "--short-version",
+    "-g", "--githash", "--print-prefix", "--print-libdir",
+})
+
+
 def main():
     config = json.loads(Path(os.environ["LEAN_BUILDTOOLS_CONFIG"]).read_text())
     if config.get("prepend_path"):
         os.environ["LEAN_PATH"] = os.pathsep.join([*config["prepend_path"], os.environ.get("LEAN_PATH", "")])
     args = sys.argv[1:]
     real = config["lean"]
-    if not any(a.endswith(".lean") for a in args):
+    if args and all(a in METADATA_FLAGS for a in args):
         os.execv(real, [real, *args])
     args = [*config.get("extra_args", []), *args]
     if any(a in args for a in ("--run", "--server", "--worker", "--stdin")):
         sys.exit("lean-buildtools: unsupported compiler mode")
+    if not any(a.endswith(".lean") for a in args):
+        sys.exit("lean-buildtools: expected .lean source path")
     source = next(a for a in args if a.endswith(".lean"))
     path = Path(source).resolve()
     if config.get("no_mathlib_build") and any(p in path.parts for p in ("Mathlib", "Mathlib.lean")):

@@ -1,6 +1,7 @@
 """Regressions for startup prediction and process-exit races, without heavy builds."""
 import errno
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -9,7 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
 
-from lean_buildtools.process import append_json, supervise, terminate, trend_reason
+from lean_buildtools import shim
+from lean_buildtools.process import append_json, capped_args, caps_match, supervise, terminate, trend_reason
 
 
 class SupervisorRegressions(unittest.TestCase):
@@ -102,6 +104,57 @@ class SupervisorRegressions(unittest.TestCase):
                             proc.wait.assert_called()
                     self.assertEqual(kill.call_args_list, [call(proc.pid, signal.SIGTERM)] +
                                      ([] if phase in ("term", "alive") else [call(proc.pid, signal.SIGKILL)]))
+
+    def test_elab_async_overrides_are_stripped_and_audited(self):
+        normalized = capped_args(
+            ["-DElab.async=true", "-Dweak.Elab.async=true", "-D", "Elab.async=true",
+             "-DmaxHeartbeats=100000", "Probe.lean"],
+            1400,
+        )
+        self.assertEqual(normalized, ["-j1", "-M1400", "-DElab.async=false",
+                                      "-DmaxHeartbeats=100000", "Probe.lean"])
+        self.assertTrue(caps_match(["lean", *normalized], 1400))
+        for override in (["-DElab.async=true"], ["-Dweak.Elab.async=true"],
+                         ["-D", "Elab.async=true"], ["-D"]):
+            with self.subTest(override=override):
+                self.assertFalse(caps_match(["lean", *normalized, *override], 1400))
+
+    def test_shim_blocks_unsupervised_non_metadata_invocations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = Path(directory) / "config.json"
+            cfg.write_text(json.dumps({"lean": "/real/lean", "extra_args": []}))
+            with patch.dict(os.environ, {"LEAN_BUILDTOOLS_CONFIG": str(cfg)}):
+                for query in (["--print-prefix"], ["--githash"], ["--version"]):
+                    with patch.object(sys, "argv", ["lean", *query]), \
+                            patch("lean_buildtools.shim.os.execv") as execv:
+                        execv.side_effect = SystemExit(0)
+                        with self.assertRaises(SystemExit) as caught:
+                            shim.main()
+                        self.assertEqual(caught.exception.code, 0)
+                        execv.assert_called_once_with("/real/lean", ["/real/lean", *query])
+                for blocked, message in (
+                    (["--stdin"], "unsupported compiler mode"),
+                    (["--server"], "unsupported compiler mode"),
+                    (["--worker"], "unsupported compiler mode"),
+                    (["--run", "script"], "unsupported compiler mode"),
+                    (["script"], "expected .lean source path"),
+                    ([], "expected .lean source path"),
+                ):
+                    with self.subTest(blocked=blocked), \
+                            patch.object(sys, "argv", ["lean", *blocked]), \
+                            patch("lean_buildtools.shim.os.execv") as execv:
+                        with self.assertRaises(SystemExit) as caught:
+                            shim.main()
+                        self.assertIn(message, str(caught.exception.code))
+                        execv.assert_not_called()
+            cfg.write_text(json.dumps({"lean": "/real/lean", "extra_args": ["--stdin"]}))
+            with patch.dict(os.environ, {"LEAN_BUILDTOOLS_CONFIG": str(cfg)}), \
+                    patch.object(sys, "argv", ["lean", "Probe.lean"]), \
+                    patch("lean_buildtools.shim.os.execv") as execv:
+                with self.assertRaises(SystemExit) as caught:
+                    shim.main()
+                self.assertIn("unsupported compiler mode", str(caught.exception.code))
+                execv.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -176,6 +176,30 @@ class Integration(unittest.TestCase):
                                 "--no-mathlib-build", success=False)
         self.assertIn("refusing to rebuild Mathlib", proc.stdout)
 
+    def test_shim_and_elab_async_overrides_are_enforced_under_lake(self):
+        (self.project / "lakefile.toml").write_text(
+            'name = "probe"\n[leanOptions]\nElab.async = true\n[[lean_lib]]\nname = "Probe"\n'
+            'moreLeanArgs = ["-j8", "-M8000", "-DElab.async=true", "-Dweak.Elab.async=true"]\n')
+        (self.project / "Probe.lean").write_text(
+            'import Lean.Elab.Command\n'
+            '#eval show Lean.Elab.Command.CommandElabM Unit from do\n'
+            '  IO.println s!"ASYNC={Lean.Elab.async.get (← Lean.getOptions)}"\n')
+        path, proc = self.run_tool("build", "Probe", "async-override", "--memory", "2200")
+        self.assertIn("ASYNC=false", proc.stdout)
+        data = json.loads((path / "build.json").read_text())
+        self.assertTrue(data["caps_verified"], data)
+        argv = data["children"][0]["argv"]
+        self.assertIn("-DElab.async=false", argv)
+        self.assertNotIn("-DElab.async=true", argv)
+        self.assertNotIn("-Dweak.Elab.async=true", argv)
+        env = os.environ.copy()
+        env["LEAN_BUILDTOOLS_CONFIG"] = str(path / "config.json")
+        denied = subprocess.run([str(path / "toolchain/bin/lean"), "--stdin"],
+                                input="theorem bad : False := sorry\n",
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("unsupported compiler mode", denied.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

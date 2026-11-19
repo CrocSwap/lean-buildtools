@@ -39,6 +39,13 @@ def rss_of(pid: int) -> int:
     return int(out.stdout.strip() or "0") * 1024
 
 
+def _elab_async_value(option: str) -> str | None:
+    key, sep, value = option.partition("=")
+    if key.strip() in ("Elab.async", "weak.Elab.async"):
+        return value.strip() if sep else ""
+    return None
+
+
 def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False, threads: int = 1) -> list[str]:
     result = []
     i = 0
@@ -51,6 +58,12 @@ def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False, threa
                 (arg[:2] in ("-j", "-M") and len(arg) > 2)):
             i += 1
             continue
+        if arg == "-D" and i + 1 < len(args) and _elab_async_value(args[i + 1]) is not None:
+            i += 2
+            continue
+        if arg.startswith("-D") and len(arg) > 2 and _elab_async_value(arg[2:]) is not None:
+            i += 1
+            continue
         result.append(arg)
         i += 1
     return [f"-j{threads}", f"-M{memory}", "-DElab.async=false",
@@ -59,7 +72,7 @@ def capped_args(args: list[str], memory: int, *, deny_sorry: bool = False, threa
 
 def caps_match(argv: list[str], memory: int, thread_count: int = 1) -> bool:
     # Exact comparison with normalized arguments also rules out later overrides.
-    threads, mem = [], []
+    threads, mem, async_vals = [], [], []
     i = 1
     while i < len(argv):
         arg = argv[i]
@@ -69,13 +82,28 @@ def caps_match(argv: list[str], memory: int, thread_count: int = 1) -> bool:
             (threads if arg in ("-j", "--threads") else mem).append(argv[i + 1])
             i += 2
             continue
+        if arg == "-D":
+            if i + 1 >= len(argv):
+                return False
+            val = _elab_async_value(argv[i + 1])
+            if val is not None:
+                async_vals.append(val)
+            i += 2
+            continue
+        if arg.startswith("-D") and len(arg) > 2:
+            val = _elab_async_value(arg[2:])
+            if val is not None:
+                async_vals.append(val)
+            i += 1
+            continue
         for flag, values in (("-j", threads), ("-M", mem),
                              ("--threads=", threads), ("--memory=", mem)):
             if arg.startswith(flag):
                 values.append(arg[len(flag):])
                 break
         i += 1
-    return threads == [str(thread_count)] and mem == [str(memory)]
+    return (threads == [str(thread_count)] and mem == [str(memory)]
+            and all(v == "false" for v in async_vals))
 
 
 def trend_reason(samples, cap: int, fraction: float, horizon: float, *,

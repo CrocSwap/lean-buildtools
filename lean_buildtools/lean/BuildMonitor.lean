@@ -52,6 +52,7 @@ def monitor : CommandElab := fun stx => do
   stamp "start" stx
   busy.set true
   try
+    modifyScope fun scope => { scope with opts := scope.opts.setBool `Elab.async false }
     elabCommand stx
   finally
     busy.set false
